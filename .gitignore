@@ -1,0 +1,4 @@
+test/core.*
+test/memory_simulator
+build/
+bin/
