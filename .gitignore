@@ -5,5 +5,4 @@ build/
 bin/
 test/full_test.txt
 test/memory_bloat.txt
-test/*.log
 *.log
