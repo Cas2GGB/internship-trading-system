@@ -5,6 +5,8 @@
 #include <cstring>
 #include <algorithm>
 
+extern bool g_isStressTest;
+
 // -----------------------------------------------------------------------------
 // Constructor / Destructor
 // -----------------------------------------------------------------------------
@@ -101,11 +103,13 @@ void OrderBook::matchOrder(Order* order) {
             lastTradeQty = matchQty;
             
             // 记录日志：输出详细交易信息
-            std::cout << "[Engine] 发生成交: Stock " << stockId 
-                      << " | 主动单(Taker) " << order->id 
-                      << " vs 被动单(Maker) " << bookOrder->id 
-                      << " | 成交数量: " << matchQty 
-                      << " | 成交价格: " << lastTradePrice << std::endl;
+            if (!g_isStressTest) {
+                std::cout << "[Engine] 发生成交: Stock " << stockId 
+                          << " | 主动单(Taker) " << order->id 
+                          << " vs 被动单(Maker) " << bookOrder->id 
+                          << " | 成交数量: " << matchQty 
+                          << " | 成交价格: " << lastTradePrice << std::endl;
+            }
             
             if (accountManager) {
                 auto processTrade = [&](Order* o, Qty qty, Price px) {

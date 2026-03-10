@@ -33,6 +33,12 @@ echo "   Condition: No Snapshots"
 echo "=================================================="
 sed -i 's/^SNAPSHOT_INTERVAL=.*/SNAPSHOT_INTERVAL=0/' "$CONF_FILE"
 # Disable snapshot completely for baseline execution
+if grep -q "ENABLE_STRESS_TEST" "$CONF_FILE"; then
+    sed -i "s/^ENABLE_STRESS_TEST=.*/ENABLE_STRESS_TEST=1/" "$CONF_FILE"
+else
+    echo "ENABLE_STRESS_TEST=1" >> "$CONF_FILE"
+fi
+
 if grep -q "ENABLE_SNAPSHOT" "$CONF_FILE"; then
     sed -i 's/^ENABLE_SNAPSHOT=.*/ENABLE_SNAPSHOT=0/' "$CONF_FILE"
 else
@@ -121,7 +127,7 @@ echo "   !!! Triggering GCORE (Real) !!!"
 
 # 使用 gcore 对进程进行快照 (这会暂停进程直到内存转储完成)
 # 注意：生成的 core 文件可能会很大，我们随后立即删除
-gcore $ENGINE_PID > /dev/null 2>&1
+gcore $ENGINE_PID > /dev/null 2>&1 || true
 
 # 立即清理 core dump 文件以节省磁盘空间
 rm -f core.$ENGINE_PID core

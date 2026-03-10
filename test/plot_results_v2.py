@@ -133,10 +133,12 @@ if __name__ == "__main__":
     plot_latency_comparison(base_data, exp_data, ctrl_data, 'max_lat', 'Peak Latency (Worst Case)', "test/latency_max.png")
 
     # 3. Avg Latency Bar Chart (Average of averages)
-    # Re-calculate overall average from the logs
+    # Re-calculate overall average from the logs:
+    # Since the C++ engine logs the *cumulative* average from Phase 2 start, 
+    # the truly accurate Phase 2 average is simply the value from the *last* record.
     def get_avg(data):
         if not data: return 0
-        return sum(d['avg_lat'] for d in data) / len(data)
+        return data[-1]['avg_lat']
 
     # Hack to reuse the plotting function by creating fake data objects with 'avg' key
     # effectively passing the computed average as a single value to be plotted

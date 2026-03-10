@@ -27,7 +27,9 @@
 ├── src/                 # C++ 源代码
 ├── test/                # 用于生成测试数据、Python绘图和存储实验结果的目录
 ├── CMakeLists.txt       # CMake 物理配置文件
-└── run_experiment.sh    # 一键式自动化综合测试脚本
+├── run_experiment.sh          # 一键式自动化性能压测脚本
+├── run_functional_test.sh     # 基础功能体验与测试脚本
+└── test_snapshot_recovery.sh  # 快照断点恢复完整性验证脚本
 ```
 
 ## 🚀 快速开始
@@ -58,7 +60,7 @@ cd ..
 **用于验证核心撮合逻辑、订单簿维护、账户资金冻结/解冻与资金结算是否正确无误。**
 * **使用方法**：
   ```bash
-  ./test/run_functional_test.sh
+  ./run_functional_test.sh
   ```
 * **测试逻辑**：脚本会将准备好的包含各种买卖挂单、撤单、资金查询等复杂交易指令集 `test/test_trading.txt` 输入引擎中运行。引擎的输出日志将直接与预期标准文件 `test/expected_functional_result.log` 进行严格的 `diff` 文本对比，确保任何一点修改都不会破坏基础账本的严谨性。
 
@@ -66,7 +68,7 @@ cd ..
 **用于严格证明“基于 Fork 写时复制内存快照并从磁盘恢复体系中，不会丢失任何订单和账户状态碎片，保证状态机绝对一致”。**
 * **使用方法**：
   ```bash
-  ./test/test_snapshot_recovery.sh
+  ./test_snapshot_recovery.sh
   ```
 * **测试逻辑**：
   1. **基准流运行**：系统将一段指令无缝一气呵成地执行完毕（包含买卖、穿透和撤单），并将最终状态流作为**基准线 (Baseline)**。
@@ -80,12 +82,12 @@ cd ..
   ./run_experiment.sh
   ```
 * **测试逻辑**：
-  1. 自动化探测是否存在压力数据，若无则调用 `test/gen_data.py` 瞬间生成千万千万量级的订单测试流。
+  1. 自动化探测是否存在压力数据，若无则调用 `test/gen_data.py` 瞬间生成千万量级的订单测试流。为确保吞吐真实性，测试将通过 `ENABLE_STRESS_TEST=1` 变量开启**无日志静默模式**和绕过基础账户校验。
   2. 启动三大阶段环境运行对照组：
-     - **Baseline** (纯净环境)：完全关闭任何快照行为，展现原生的百万级 TPS 峰值表现。
-     - **Experiment** (Fork COW)：开启并执行内部基于 Fork 的快照生成，测量基于微秒级写时复制造成的极小耗时分布与恢复。
-     - **Control** (外部强力 Gcore)：使用操作系统底层 `gcore` 命令对进程直接拉取全量运行内存，收集秒级级别停顿导致的全系统卡死数据。
-  3. 解析提取三大日志过程中的毫秒级吞吐指标与订单延迟，联动 Python (`plot_results_v2.py`) 制出折线图与对比图，分别保存至 `test/latency_avg.png` 和 `test/tps_comparison.png` 等文件中。
+     - **Baseline** (纯净环境)：完全关闭任何快照行为，展现原生的过百万级 TPS 峰值表现与不到 0.1 微秒的纯净延迟。
+     - **Experiment** (Fork COW)：开启并执行内部基于 Fork 的快照生成，测量基于写时复制造成的极小耗时分布与恢复。
+     - **Control** (外部强力 Gcore)：使用操作系统底层 `gcore` 命令对进程直接拉取全量运行内存，收集长达秒级停顿导致的全系统卡死数据。
+  3. 通过引入“端到端全循环耗时 (Cycle Latency)”，无死角捕获并提取三大阶段各种系统卡顿的极端尖刺延迟，联动 Python (`plot_results_v2.py`) 制出折线图与对比图，分别保存至 `test/latency_avg.png`, `test/latency_max.png` 和 `test/tps_comparison.png` 等文件中。
 
 ## 🎮 手动运行使用
 

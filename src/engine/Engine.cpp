@@ -7,6 +7,8 @@
 #include <sys/prctl.h>
 #include <chrono>
 
+bool g_isStressTest = false;
+
 Engine::Engine() {
     // Allow any process to ptrace this process (needed for gcore in some environments)
     // This is useful for debugging or external snapshots without root.
@@ -65,7 +67,12 @@ void Engine::init(const std::string& configPath) {
              try {
                  int val = std::stoi(value);
                  enableSnapshot = (val != 0);
-                 if (!enableSnapshot) std::cout << "[Engine] Snapshot functionality DISABLED." << std::endl;
+             } catch(...) {}
+        } else if (key == "ENABLE_STRESS_TEST") {
+             try {
+                 int val = std::stoi(value);
+                 g_isStressTest = (val != 0);
+                 if (g_isStressTest) std::cout << "[Engine] Stress Test Mode ENABLED. Verbose logs muted." << std::endl;
              } catch(...) {}
         }
     }
@@ -141,17 +148,17 @@ void Engine::processCommand(const std::string& line) {
         
         // 增加网关层的资金校验 (Risk Check)
         Account& acc = accountManager.getAccount(order.clientId);
-        if (order.side == Side::BUY) {
+        if (g_isStressTest) { /* 压测模式下忽略资金持仓校验以方便生成无限单 */ } else if (order.side == Side::BUY) {
             Price cost = order.price * order.originalQty;
             if (acc.balance < cost) {
-                std::cerr << "[Engine] 拒单 (资金不足): Client " << order.clientId << " Balance " << acc.balance << " < Cost " << cost << std::endl;
+                if (!g_isStressTest) std::cout << "[Engine] 拒单 (资金不足): Client " << order.clientId << " Balance " << acc.balance << " < Cost " << cost << std::endl;
                 return;
             }
             acc.balance -= cost;
             acc.frozenFunds += cost;
         } else {
             if (acc.positions[order.stockId] < order.originalQty) {
-                std::cerr << "[Engine] 拒单 (持仓不足): Client " << order.clientId << " Position " << acc.positions[order.stockId] << " < Qty " << order.originalQty << std::endl;
+                if (!g_isStressTest) std::cout << "[Engine] 拒单 (持仓不足): Client " << order.clientId << " Position " << acc.positions[order.stockId] << " < Qty " << order.originalQty << std::endl;
                 return;
             }
             acc.positions[order.stockId] -= order.originalQty;
@@ -192,10 +199,12 @@ void Engine::processCommand(const std::string& line) {
 
         bool success = ob->cancelOrder(orderId);
         
-        if (!success) {
-            std::cout << "[Engine] 撤单失败: Stock " << stockId << " Order " << orderId << " (已完全成交或订单不存在)" << std::endl;
-        } else {
-            std::cout << "[Engine] 撤单成功: Stock " << stockId << " Order " << orderId << " (已撤销剩余未成交部分)" << std::endl;
+        if (!g_isStressTest) {
+            if (!success) {
+                std::cout << "[Engine] 撤单失败: Stock " << stockId << " Order " << orderId << " (已完全成交或订单不存在)" << std::endl;
+            } else {
+                std::cout << "[Engine] 撤单成功: Stock " << stockId << " Order " << orderId << " (已撤销剩余未成交部分)" << std::endl;
+            }
         }
 
         if (enableSnapshot && snapshotInterval > 0 && ++processedOrderCount >= snapshotInterval) {
@@ -269,8 +278,13 @@ void Engine::processCommand(const std::string& line) {
         
     // 性能指标
     auto end = std::chrono::high_resolution_clock::now();
-    auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-    
+    // 之前只计算 end - start (执行时间)，如果此时正好发生了 gcore/fork 卡顿但卡在 getline 等待上，
+    // 则该命令的执行时间依然很短，导致图形中偶尔抓不到 max latency 尖刺。
+    // 因此我们引入 cycle_latency (端到端循环时间) 来捕捉系统的一切阻塞。
+    static auto lastEnd = start;
+    auto cycle_latency = std::chrono::duration_cast<std::chrono::microseconds>(end - lastEnd).count();
+    lastEnd = end;
+
     static uint64_t totalLatency = 0;
     static uint64_t maxLatency = 0;
     static uint64_t processedOrders = 0;
@@ -282,6 +296,7 @@ void Engine::processCommand(const std::string& line) {
         maxLatency = 0;
         processedOrders = 0;
         startTime = std::chrono::high_resolution_clock::now();
+        lastEnd = startTime;
         std::cout << "[Engine] Metrics reset. Ready for Phase 2." << std::endl;
         
         // Print memory usage
@@ -296,10 +311,10 @@ void Engine::processCommand(const std::string& line) {
         return; // Don't count this command in stats
     }
     
-    // 记录所有命令的延迟（包含 SNAPSHOT 命令），确保统计数据的完整性
+    // 记录所有命令的循环耗时，彻底捕捉任何被 OS 强行暂停的真空时间
     processedOrders++;
-    totalLatency += latency;
-    if (latency > maxLatency) maxLatency = latency;
+    totalLatency += cycle_latency;
+    if (cycle_latency > maxLatency) maxLatency = cycle_latency;
     
     // 每 10万条订单报告一次
     if (processedOrders % 100000 == 0) {

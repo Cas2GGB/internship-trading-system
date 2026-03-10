@@ -5,4 +5,6 @@ build/
 bin/
 test/full_test.txt
 test/memory_bloat.txt
-*.log
+test/*.log
+test/snapshot_test/*log
+test/*.dat

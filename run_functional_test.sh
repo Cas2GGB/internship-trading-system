@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-PROJECT_ROOT="/home/cas/internship"
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd $PROJECT_ROOT
 
 echo "========================================"
@@ -11,6 +11,7 @@ cd build && make -j4 && cd ..
 echo "========================================"
 echo "2. 运行撮合与撤单功能测试"
 echo "========================================"
+sed -i "s/^ENABLE_STRESS_TEST=.*/ENABLE_STRESS_TEST=0/" conf/matching_engine.conf
 LOG_FILE="test/functional_result.log"
 EXPECTED_FILE="test/expected_functional_result.log"
 
