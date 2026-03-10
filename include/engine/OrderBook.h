@@ -6,6 +6,7 @@
 #include "Order.h"
 #include "SkipList.h"
 #include "ObjectPool.h"
+class AccountManager;
 
 // -----------------------------------------------------------------------------
 // 订单簿类定义
@@ -14,6 +15,8 @@
 class OrderBook {
 private:
     StockID stockId; 
+    AccountManager* accountManager; // 新增账户管理引用
+
     
     // 核心存储
     SkipList<Greater> bids;  // 买单：价格优先（高->低）
@@ -34,7 +37,7 @@ private:
     Qty lastTradeQty = 0;     
 
 public:
-    OrderBook(StockID id);
+    OrderBook(StockID id, AccountManager* accMgr = nullptr);
     ~OrderBook();
 
     // 核心交互接口

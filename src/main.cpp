@@ -1,13 +1,20 @@
 #include <iostream>
+#include <fstream>
 #include "Engine.h"
 
 int main(int argc, char** argv) {
     try {
         Engine engine;
         
-        // Simple config path determination
-        // Assumes running from bin/ directory or project root with correct relative path
-        std::string configPath = "../conf/matching_engine.conf";
+        // Check for config at different locations
+        std::string configPath = "conf/matching_engine.conf";
+        {
+            std::ifstream f(configPath);
+            if (!f.good()) {
+                configPath = "../conf/matching_engine.conf";
+            }
+        }
+        
         engine.init(configPath);
         
         if (argc > 1) {

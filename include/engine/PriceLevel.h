@@ -9,88 +9,56 @@
 const int SKIPLIST_MAX_LEVEL = 16; 
 
 /**
- * @brief PriceLevel 价格档位
+ * @brief PriceLevel 价格档位结构体
  * 
  * 一个 PriceLevel 代表了 OrderBook 中某一特定价格的所有挂单集合。
- * 它既是一个双向链表的管理者 (Head/Tail)，也是跳表 (SkipList) 的一个节点。
+ * 它既是一个双向链表的管理者 (维护相同价格订单的时间优先顺序：Head/Tail)，
+ * 也是跳表 (SkipList) 的一个节点实体。
  */
 struct PriceLevel {
     // -------------------------------------------------------------------------
-    // 订单队列管理 (FIFO)
+    // 订单队列管理 (FIFO 时间优先)
     // -------------------------------------------------------------------------
-    Price price;           // 该档位的价格
-    Qty totalQty;          // 该档位所有订单的总挂单量 (用于 L2 行情快照)
-    uint32_t orderCount;   // 该档位包含的订单个数 (用于 L2 行情深度分析)
+    Price price;           // 该档位的具体价格
+    Qty totalQty;          // 该档位所有订单的总挂单量 (用于 L2 级别的行情快照汇总)
+    uint32_t orderCount;   // 该档位包含的未成交订单个数 (用于 L2 级别的行情深度分析)
     
-    Order* head;           // 链表头指针：指向该价格档位最早加入的订单 (最先成交)
-    Order* tail;           // 链表尾指针：指向该价格档位最新加入的订单 (新单插入位置)
+    Order* head;           // 链表头指针：指向该价格档位最早加入且未成交的订单 (将最先被撮合执行)
+    Order* tail;           // 链表尾指针：指向该价格档位最新加入的订单 (新来的同价订单附加在这里)
     
     // -------------------------------------------------------------------------
     // 跳表节点属性
     // -------------------------------------------------------------------------
-    // 跳表的层级索引指针数组，指向下一个 PriceLevel
-    // level: 1-based index (尽管数组是 0-based)
-    // forward[i] 存储第 i 层的下一个节点指针，每层会有多个PriceLevel
+    // 跳表的层级索引指针数组，指向各层中下一个 PriceLevel
+    // 每层有多个 PriceLevel，forward[i] 存储该节点在跳表第 i 层中的后续节点指针
     PriceLevel* forward[SKIPLIST_MAX_LEVEL]; 
 
-    // 构造函数
-    PriceLevel(Price p) 
-        : price(p), totalQty(0), orderCount(0), head(nullptr), tail(nullptr) {
-        for (int i = 0; i < SKIPLIST_MAX_LEVEL; ++i) {
-            forward[i] = nullptr;
-        }
-    }
+    /**
+     * @brief 构造函数：初始化一个新的价格档位。
+     * @param p 设定的价格
+     */
+    PriceLevel(Price p);
 
     // -------------------------------------------------------------------------
     // 侵入式链表操作 (O(1))
     // -------------------------------------------------------------------------
     
-    // 将订单加入队列尾部
-    void addOrder(Order* order) {
-        order->level = this;
-        order->next = nullptr;
-        order->prev = tail;
-        
-        if (tail) {
-            tail->next = order;
-        } else {
-            head = order;
-        }
-        tail = order;
-        
-        totalQty += order->leavesQty;
-        orderCount++;
-    }
+    /**
+     * @brief 将新产生的订单加入到当前价格档位的队列尾部。
+     * @param order 指向要挂入的新订单指针
+     */
+    void addOrder(Order* order);
 
-    // 从队列中移除指定订单 (用于撤单/成交)
-    // 如果移除后该价格档位变空，则返回 true
-    bool removeOrder(Order* order) {
-        if (order->prev) {
-            order->prev->next = order->next;
-        } else {
-            // 是头结点
-            head = order->next;
-        }
-        
-        if (order->next) {
-            order->next->prev = order->prev;
-        } else {
-            // 是尾结点
-            tail = order->prev;
-        }
-        
-        // 为了安全清空指针
-        order->prev = nullptr;
-        order->next = nullptr;
-        order->level = nullptr;
-        
-        totalQty -= order->leavesQty;
-        orderCount--;
-        
-        return isEmpty();
-    }
+    /**
+     * @brief 从当前价格队列中安全地移除指定订单 (常用于撤单或该订单被完全成交吃掉后)。
+     * @param order 被移除的订单指针
+     * @return true 如果移除后该价格档位上的残留订单数量变为0 (此时通常意味着需要在跳表中将此档位一并删去); false 则代表此档位仍有其他订单。
+     */
+    bool removeOrder(Order* order);
 
-    bool isEmpty() const {
-        return orderCount == 0;
-    }
+    /**
+     * @brief 判断该价格档位是否已经空了（即没有任何有效挂单）。
+     * @return true 空的; false 非空
+     */
+    bool isEmpty() const;
 };

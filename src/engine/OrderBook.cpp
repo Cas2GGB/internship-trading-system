@@ -1,4 +1,5 @@
 #include "OrderBook.h"
+#include "AccountManager.h"
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -8,7 +9,7 @@
 // Constructor / Destructor
 // -----------------------------------------------------------------------------
 
-OrderBook::OrderBook(StockID id) : stockId(id) {
+OrderBook::OrderBook(StockID id, AccountManager* accMgr) : stockId(id), accountManager(accMgr) {
     // 初始时最优买卖盘应为空
 }
 
@@ -99,9 +100,31 @@ void OrderBook::matchOrder(Order* order) {
             lastTradePrice = bestOpposingLevel->price;
             lastTradeQty = matchQty;
             
-            // 记录日志 (演示使用 stdout)
-            // std::cout << "Trade! ID:" << order->id << " vs " << bookOrder->id << " Qty:" << matchQty << " @ " << lastTradePrice << std::endl;
+            // 记录日志：输出详细交易信息
+            std::cout << "[Engine] 发生成交: Stock " << stockId 
+                      << " | 主动单(Taker) " << order->id 
+                      << " vs 被动单(Maker) " << bookOrder->id 
+                      << " | 成交数量: " << matchQty 
+                      << " | 成交价格: " << lastTradePrice << std::endl;
             
+            if (accountManager) {
+                auto processTrade = [&](Order* o, Qty qty, Price px) {
+                    Account& acc = accountManager->getAccount(o->clientId);
+                    if (o->side == Side::BUY) {
+                        acc.frozenFunds -= (qty * o->price);
+                        acc.positions[stockId] += qty;
+                        // 退回差价 (限价 - 实际成交价)
+                        acc.balance += (qty * (o->price - px));
+                    } else { // SELL
+                        acc.frozenPositions[stockId] -= qty;
+                        acc.balance += (qty * px);
+                    }
+                };
+                // 处理主动单和被动单的资金
+                processTrade(order, matchQty, lastTradePrice);
+                processTrade(bookOrder, matchQty, lastTradePrice);
+            }
+
             // 如果订单簿中的订单完全成交，移除它
             if (bookOrder->leavesQty == 0) {
                 Order* filledOrder = bookOrder;
@@ -209,6 +232,10 @@ void OrderBook::saveSnapshot(const std::string& filename) {
     
     ofs.write(reinterpret_cast<char*>(&header), sizeof(header));
     
+    // 【优化】分块缓冲写入 (Chunked Buffer)，防止由于全量 reserve 在极限场景下导致 OOM
+    const size_t CHUNK_SIZE = 100000; // 单次落盘批次大小 (约 4~5MB)
+    std::vector<OrderEntry> buffer;
+    buffer.reserve(CHUNK_SIZE);
     // 我们必需按照 价格/时间 优先级遍历，以确保恢复的确定性
     // 1. 买单 (High to Low, then FIFO)
     PriceLevel* curr = bids.begin();
@@ -227,7 +254,14 @@ void OrderBook::saveSnapshot(const std::string& filename) {
             entry.type = o->type;
             entry.timeInForce = o->timeInForce;
             
-            ofs.write(reinterpret_cast<char*>(&entry), sizeof(entry));
+            buffer.push_back(entry);
+            
+            // 如果缓冲区满了，立即刷盘并清空游标，从而持续复用这几 M 的内存
+            if (buffer.size() >= CHUNK_SIZE) {
+                ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(OrderEntry));
+                buffer.clear();
+            }
+            
             o = o->next;
         }
         // 移动到下一个价格档位
@@ -252,10 +286,21 @@ void OrderBook::saveSnapshot(const std::string& filename) {
             entry.type = o->type;
             entry.timeInForce = o->timeInForce;
             
-            ofs.write(reinterpret_cast<char*>(&entry), sizeof(entry));
+            buffer.push_back(entry);
+            
+            // 如果缓冲区满了，立即刷盘并清空游标，从而持续复用这几 M 的内存
+            if (buffer.size() >= CHUNK_SIZE) {
+                ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(OrderEntry));
+                buffer.clear();
+            }
+            
             o = o->next;
         }
         curr = curr->forward[0];
+    }
+    
+    if (!buffer.empty()) {
+        ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(OrderEntry));
     }
     
     ofs.close();
@@ -276,9 +321,17 @@ void OrderBook::loadSnapshot(const std::string& filename) {
     
     // 如果有的话，清除当前状态（简单实现假设为空簿）
     
-    for (uint64_t i = 0; i < header.orderCount; ++i) {
-        OrderEntry entry;
-        ifs.read(reinterpret_cast<char*>(&entry), sizeof(entry));
+    // 【加载优化】使用大块缓冲区流式读取订单数据，大幅削减 read 系统调用
+    const size_t CHUNK_SIZE = 100000;
+    std::vector<OrderEntry> buffer(CHUNK_SIZE);
+    
+    size_t ordersRead = 0;
+    while (ordersRead < header.orderCount) {
+        size_t toRead = std::min(CHUNK_SIZE, static_cast<size_t>(header.orderCount - ordersRead));
+        ifs.read(reinterpret_cast<char*>(buffer.data()), toRead * sizeof(OrderEntry));
+        
+        for (size_t i = 0; i < toRead; ++i) {
+            const OrderEntry& entry = buffer[i];
         
         // 重建订单 - 使用对象池
         Order* order = orderPool.acquire(); 
@@ -307,7 +360,9 @@ void OrderBook::loadSnapshot(const std::string& filename) {
         if (level) {
             level->addOrder(order);
         }
-    }
+        } // inner chunk loop
+        ordersRead += toRead;
+    } // outer chunk loop
     
     updateBestCache();
     ifs.close();

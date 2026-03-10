@@ -1,4 +1,7 @@
 test/core.*
+test/full_test.txt
 test/memory_simulator
 build/
 bin/
+test/full_test.txt
+test/memory_bloat.txt
