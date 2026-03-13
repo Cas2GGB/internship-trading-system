@@ -97,6 +97,7 @@ void OrderBook::matchOrder(Order* order) {
             // 执行成交
             order->leavesQty -= matchQty;
             bookOrder->leavesQty -= matchQty;
+            bestOpposingLevel->totalQty -= matchQty;
             
             // 更新统计数据
             lastTradePrice = bestOpposingLevel->price;
@@ -168,6 +169,19 @@ bool OrderBook::cancelOrder(OrderID orderId) {
     }
     
     Order* order = it->second;
+
+    if (accountManager) {
+        Account& acc = accountManager->getAccount(order->clientId);
+        if (order->side == Side::BUY) {
+            Price cost = order->price * order->leavesQty;
+            acc.balance += cost;
+            acc.frozenFunds -= cost;
+        } else {
+            acc.positions[stockId] += order->leavesQty;
+            acc.frozenPositions[stockId] -= order->leavesQty;
+        }
+    }
+
     PriceLevel* level = order->level;
     
     if (level) {
