@@ -8,3 +8,5 @@ test/memory_bloat.txt
 test/*.log
 test/snapshot_test/*log
 test/*.dat
+test/*.png
+conf/*
