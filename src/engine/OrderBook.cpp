@@ -112,7 +112,7 @@ void OrderBook::matchOrder(Order* order) {
                           << " | 成交价格: " << lastTradePrice << std::endl;
             }
             
-            if (accountManager && !g_isStressTest) {
+            if (accountManager /*&& !g_isStressTest*/) {
                 auto processTrade = [&](Order* o, Qty qty, Price px) {
                     Account& acc = accountManager->getAccount(o->clientId);
                     if (o->side == Side::BUY) {

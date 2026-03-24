@@ -6,6 +6,11 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <chrono>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include <iomanip>
+#include <iomanip>
 
 bool g_isStressTest = false;
 
@@ -148,7 +153,8 @@ void Engine::processCommand(const std::string& line) {
         
         // 增加网关层的资金校验 (Risk Check)
         Account& acc = accountManager.getAccount(order.clientId);
-        if (g_isStressTest) { /* 压测模式下忽略资金持仓校验以方便生成无限单 */ } else if (order.side == Side::BUY) {
+        //if (g_isStressTest) { /* 压测模式下忽略资金持仓校验以方便生成无限单 */ } else 
+        if (order.side == Side::BUY) {
             Price cost = order.price * order.originalQty;
             if (acc.balance < cost) {
                 if (!g_isStressTest) std::cout << "[Engine] 拒单 (资金不足): Client " << order.clientId << " Balance " << acc.balance << " < Cost " << cost << std::endl;
@@ -260,11 +266,23 @@ void Engine::processCommand(const std::string& line) {
         if (tokens.size() < 2) return;
         ClientID cid = std::stoull(tokens[1]);
         Account& acc = accountManager.getAccount(cid);
-        std::cout << "[Engine] Account " << cid << " | Balance: " << acc.balance 
+        std::cout << "[Engine] Account " << cid
+                  << " | Balance: " << acc.balance
                   << " | FrozenFunds: " << acc.frozenFunds;
-        // 简单打印一下当前股票 1 的持仓
-        std::cout << " | Pos(Stock 1): " << acc.positions[1] 
-                  << " | FrozenPos(Stock 1): " << acc.frozenPositions[1] << std::endl;
+        // 输出所有股票持仓（按股票ID升序排列，保证输出稳定可比对）
+        std::vector<StockID> posStocks;
+        for (auto& kv : acc.positions)      posStocks.push_back(kv.first);
+        for (auto& kv : acc.frozenPositions) {
+            if (acc.positions.find(kv.first) == acc.positions.end())
+                posStocks.push_back(kv.first);
+        }
+        std::sort(posStocks.begin(), posStocks.end());
+        for (StockID sid : posStocks) {
+            Qty pos   = (acc.positions.count(sid)       ? acc.positions.at(sid)       : 0);
+            Qty fpos  = (acc.frozenPositions.count(sid) ? acc.frozenPositions.at(sid) : 0);
+            std::cout << " | Stock" << sid << ":" << pos << "(frozen:" << fpos << ")";
+        }
+        std::cout << std::endl;
     } else if (cmd == "GIVE_POS") {
         // 用于在测试数据开头强行给空头分配仓位 GIVE_POS <ClientID> <StockID> <Qty>
         if (tokens.size() < 4) return;
@@ -289,12 +307,23 @@ void Engine::processCommand(const std::string& line) {
     static uint64_t maxLatency = 0;
     static uint64_t processedOrders = 0;
     // 使用第一条有效命令的 开始时间(start) 作为基准，而不是当前时间(now)，以包含第一条单的耗时
-    static auto startTime = start; 
+    static auto startTime = start;
+
+    // 分位数窗口：每 10 万条计算一次“窗口分位数”，避免累计统计稀释瞬时抖动
+    static std::vector<uint32_t> latencyWindow;
+    if (latencyWindow.capacity() < 10000) latencyWindow.reserve(10000);
+    
+    // 超阈值计数
+    static uint64_t over100us = 0;
+    static uint64_t over1ms = 0;
 
     if (cmd == "RESET_METRICS") {
         totalLatency = 0;
         maxLatency = 0;
         processedOrders = 0;
+        latencyWindow.clear();
+        over100us = 0;
+        over1ms = 0;
         startTime = std::chrono::high_resolution_clock::now();
         lastEnd = startTime;
         std::cout << "[Engine] Metrics reset. Ready for Phase 2." << std::endl;
@@ -315,19 +344,49 @@ void Engine::processCommand(const std::string& line) {
     processedOrders++;
     totalLatency += cycle_latency;
     if (cycle_latency > maxLatency) maxLatency = cycle_latency;
+    latencyWindow.push_back((uint32_t)cycle_latency);
     
-    // 每 10万条订单报告一次
-    if (processedOrders % 100000 == 0) {
+    // 统计超阈值
+    if (cycle_latency > 100) over100us++;
+    if (cycle_latency > 1000) over1ms++;
+
+    // 每 1万条订单报告一次（更高频率，更敏感）
+    if (processedOrders % 10000 == 0) {
         auto now = std::chrono::high_resolution_clock::now();
         // 使用微秒计算以避免秒级取整导致的 TPS 误差（例如 1.9秒被记为 1秒）
         auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(now - startTime).count();
         if (durationUs > 0) {
-            double tps = (processedOrders * 1000000.0) / (double)durationUs;
+            double tps    = (processedOrders * 1000000.0) / (double)durationUs;
             double avgLat = totalLatency / (double)processedOrders;
-            std::cout << "[Perf] Orders: " << processedOrders 
-                      << " | TPS: " << (uint64_t)tps 
-                      << " | Avg Latency: " << avgLat << " us"
-                          << " | Max Latency: " << maxLatency << " us" << std::endl;
+
+            // 计算窗口分位数（精确 nth_element），避免指数桶量化误差
+            auto percentileInWindow = [](std::vector<uint32_t>& arr, double p) -> uint64_t {
+                if (arr.empty()) return 0;
+                size_t n = arr.size();
+                size_t idx = (size_t)std::ceil(p * n) - 1; // 例如 p=0.999, n=100000 -> 99899
+                if (idx >= n) idx = n - 1;
+                std::nth_element(arr.begin(), arr.begin() + idx, arr.end());
+                return arr[idx];
+            };
+
+            uint64_t p50     = percentileInWindow(latencyWindow, 0.500);
+            uint64_t p999    = percentileInWindow(latencyWindow, 0.999);
+            uint64_t winMax  = *std::max_element(latencyWindow.begin(), latencyWindow.end());
+            
+            double over100us_rate = (processedOrders > 0) ? (100.0 * over100us / processedOrders) : 0.0;
+            double over1ms_rate   = (processedOrders > 0) ? (100.0 * over1ms / processedOrders) : 0.0;
+
+            std::cout << "[Perf] Orders: " << processedOrders
+                      << " | TPS: "          << (uint64_t)tps
+                      << " | Avg Latency: "  << avgLat << " us"
+                      << " | P50: "          << p50     << " us"
+                      << " | P999: "         << p999    << " us"
+                      << " | WinMax: "       << winMax  << " us"
+                      << " | >100us: "       << std::fixed << std::setprecision(2) << over100us_rate << "%"
+                      << " | >1ms: "         << over1ms_rate << "%"
+                      << " | Max Latency: "  << maxLatency << " us" << std::endl;
+
+            latencyWindow.clear();
         }
     }
 }

@@ -6,7 +6,10 @@ bin/
 test/full_test.txt
 test/memory_bloat.txt
 test/*.log
+!test/expected_functional_result.log
+test/snapshot_test_data.txt
 test/snapshot_test/*log
+test/snapshot_recovery_result/
 test/*.dat
 test/*.png
 conf/*
