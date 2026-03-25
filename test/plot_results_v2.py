@@ -21,9 +21,9 @@ def parse_log_phase(filepath):
         r'Orders: (\d+)'
         r' \| TPS: (\d+)'
         r' \| Avg Latency: ([\d\.]+) us'
-        r' \| P50: (\d+) us'
-        r' \| P999: (\d+) us'
-        r' \| WinMax: (\d+) us'
+        r' \| P50: ([\d\.]+) us'
+        r' \| P999: ([\d\.]+) us'
+        r' \| WinMax: ([\d\.]+) us'
         r' \| >100us: ([\d\.]+)%'
         r' \| >1ms: ([\d\.]+)%'
         r' \| Max Latency: (\d+) us'
@@ -33,8 +33,8 @@ def parse_log_phase(filepath):
         r'Orders: (\d+)'
         r' \| TPS: (\d+)'
         r' \| Avg Latency: ([\d\.]+) us'
-        r' \| P50: (\d+) us'
-        r' \| P999: (\d+) us'
+        r' \| P50: ([\d\.]+) us'
+        r' \| P999: ([\d\.]+) us'
         r' \| >100us: ([\d\.]+)%'
         r' \| >1ms: ([\d\.]+)%'
         r' \| Max Latency: (\d+) us'
@@ -61,9 +61,9 @@ def parse_log_phase(filepath):
                     'orders':    int(m.group(1)),
                     'tps':       int(m.group(2)),
                     'avg_lat':   float(m.group(3)),
-                    'p50':       int(m.group(4)),
-                    'p999':      int(m.group(5)),
-                    'winmax':    int(m.group(6)),
+                    'p50':       float(m.group(4)),
+                    'p999':      float(m.group(5)),
+                    'winmax':    float(m.group(6)),
                     'over100us': float(m.group(7)),
                     'over1ms':   float(m.group(8)),
                     'max_lat':   int(m.group(9)),
@@ -76,8 +76,8 @@ def parse_log_phase(filepath):
                     'orders':    int(m.group(1)),
                     'tps':       int(m.group(2)),
                     'avg_lat':   float(m.group(3)),
-                    'p50':       int(m.group(4)),
-                    'p999':      int(m.group(5)),
+                    'p50':       float(m.group(4)),
+                    'p999':      float(m.group(5)),
                     'winmax':    None,
                     'over100us': float(m.group(6)),
                     'over1ms':   float(m.group(7)),

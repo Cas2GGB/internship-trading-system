@@ -10,7 +10,6 @@
 #include <cmath>
 #include <vector>
 #include <iomanip>
-#include <iomanip>
 
 bool g_isStressTest = false;
 
@@ -266,23 +265,11 @@ void Engine::processCommand(const std::string& line) {
         if (tokens.size() < 2) return;
         ClientID cid = std::stoull(tokens[1]);
         Account& acc = accountManager.getAccount(cid);
-        std::cout << "[Engine] Account " << cid
-                  << " | Balance: " << acc.balance
+        std::cout << "[Engine] Account " << cid << " | Balance: " << acc.balance 
                   << " | FrozenFunds: " << acc.frozenFunds;
-        // 输出所有股票持仓（按股票ID升序排列，保证输出稳定可比对）
-        std::vector<StockID> posStocks;
-        for (auto& kv : acc.positions)      posStocks.push_back(kv.first);
-        for (auto& kv : acc.frozenPositions) {
-            if (acc.positions.find(kv.first) == acc.positions.end())
-                posStocks.push_back(kv.first);
-        }
-        std::sort(posStocks.begin(), posStocks.end());
-        for (StockID sid : posStocks) {
-            Qty pos   = (acc.positions.count(sid)       ? acc.positions.at(sid)       : 0);
-            Qty fpos  = (acc.frozenPositions.count(sid) ? acc.frozenPositions.at(sid) : 0);
-            std::cout << " | Stock" << sid << ":" << pos << "(frozen:" << fpos << ")";
-        }
-        std::cout << std::endl;
+        // 简单打印一下当前股票 1 的持仓
+        std::cout << " | Pos(Stock 1): " << acc.positions[1] 
+                  << " | FrozenPos(Stock 1): " << acc.frozenPositions[1] << std::endl;
     } else if (cmd == "GIVE_POS") {
         // 用于在测试数据开头强行给空头分配仓位 GIVE_POS <ClientID> <StockID> <Qty>
         if (tokens.size() < 4) return;
@@ -300,7 +287,8 @@ void Engine::processCommand(const std::string& line) {
     // 则该命令的执行时间依然很短，导致图形中偶尔抓不到 max latency 尖刺。
     // 因此我们引入 cycle_latency (端到端循环时间) 来捕捉系统的一切阻塞。
     static auto lastEnd = start;
-    auto cycle_latency = std::chrono::duration_cast<std::chrono::microseconds>(end - lastEnd).count();
+    auto cycle_latency_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - lastEnd).count();
+    auto cycle_latency    = cycle_latency_ns / 1000; // 微秒，用于阈值比较和均值统计
     lastEnd = end;
 
     static uint64_t totalLatency = 0;
@@ -309,21 +297,21 @@ void Engine::processCommand(const std::string& line) {
     // 使用第一条有效命令的 开始时间(start) 作为基准，而不是当前时间(now)，以包含第一条单的耗时
     static auto startTime = start;
 
-    // 分位数窗口：每 10 万条计算一次“窗口分位数”，避免累计统计稀释瞬时抖动
+    // 分位数窗口：以纳秒存储，避免微秒截断导致所有延迟落在同一整数桶
     static std::vector<uint32_t> latencyWindow;
     if (latencyWindow.capacity() < 10000) latencyWindow.reserve(10000);
-    
+
     // 超阈值计数
     static uint64_t over100us = 0;
-    static uint64_t over1ms = 0;
+    static uint64_t over1ms   = 0;
 
     if (cmd == "RESET_METRICS") {
+        over100us = 0;
+        over1ms   = 0;
         totalLatency = 0;
         maxLatency = 0;
         processedOrders = 0;
         latencyWindow.clear();
-        over100us = 0;
-        over1ms = 0;
         startTime = std::chrono::high_resolution_clock::now();
         lastEnd = startTime;
         std::cout << "[Engine] Metrics reset. Ready for Phase 2." << std::endl;
@@ -344,9 +332,9 @@ void Engine::processCommand(const std::string& line) {
     processedOrders++;
     totalLatency += cycle_latency;
     if (cycle_latency > maxLatency) maxLatency = cycle_latency;
-    latencyWindow.push_back((uint32_t)cycle_latency);
-    
-    // 统计超阈值
+    latencyWindow.push_back((uint32_t)(cycle_latency_ns)); // 纳秒存储，保留亚微秒分辨率
+
+    // 超阈值比较仍用微秒
     if (cycle_latency > 100) over100us++;
     if (cycle_latency > 1000) over1ms++;
 
@@ -359,29 +347,32 @@ void Engine::processCommand(const std::string& line) {
             double tps    = (processedOrders * 1000000.0) / (double)durationUs;
             double avgLat = totalLatency / (double)processedOrders;
 
-            // 计算窗口分位数（精确 nth_element），避免指数桶量化误差
-            auto percentileInWindow = [](std::vector<uint32_t>& arr, double p) -> uint64_t {
-                if (arr.empty()) return 0;
+            // 计算窗口分位数（精确 nth_element）
+            // 窗口以纳秒存储，结果除以1000转换为微秒（保留小数）
+            // 注意：nth_element 会原地修改数组，每次计算分位数必须使用独立副本，
+            // 否则 P999 会在 P50 已部分排序的数组上计算，结果不正确。
+            auto percentileInWindow = [](std::vector<uint32_t> arr, double p) -> double {
+                if (arr.empty()) return 0.0;
                 size_t n = arr.size();
-                size_t idx = (size_t)std::ceil(p * n) - 1; // 例如 p=0.999, n=100000 -> 99899
+                size_t idx = (size_t)std::ceil(p * n) - 1;
                 if (idx >= n) idx = n - 1;
                 std::nth_element(arr.begin(), arr.begin() + idx, arr.end());
-                return arr[idx];
+                return arr[idx] / 1000.0; // ns -> us
             };
 
-            uint64_t p50     = percentileInWindow(latencyWindow, 0.500);
-            uint64_t p999    = percentileInWindow(latencyWindow, 0.999);
-            uint64_t winMax  = *std::max_element(latencyWindow.begin(), latencyWindow.end());
-            
+            double p50    = percentileInWindow(latencyWindow, 0.500);
+            double p999   = percentileInWindow(latencyWindow, 0.999);
+            double winMax = *std::max_element(latencyWindow.begin(), latencyWindow.end()) / 1000.0;
+
             double over100us_rate = (processedOrders > 0) ? (100.0 * over100us / processedOrders) : 0.0;
-            double over1ms_rate   = (processedOrders > 0) ? (100.0 * over1ms / processedOrders) : 0.0;
+            double over1ms_rate   = (processedOrders > 0) ? (100.0 * over1ms   / processedOrders) : 0.0;
 
             std::cout << "[Perf] Orders: " << processedOrders
                       << " | TPS: "          << (uint64_t)tps
-                      << " | Avg Latency: "  << avgLat << " us"
-                      << " | P50: "          << p50     << " us"
-                      << " | P999: "         << p999    << " us"
-                      << " | WinMax: "       << winMax  << " us"
+                      << " | Avg Latency: "  << std::fixed << std::setprecision(2) << avgLat << " us"
+                      << " | P50: "          << std::fixed << std::setprecision(2) << p50    << " us"
+                      << " | P999: "         << std::fixed << std::setprecision(2) << p999   << " us"
+                      << " | WinMax: "       << std::fixed << std::setprecision(2) << winMax << " us"
                       << " | >100us: "       << std::fixed << std::setprecision(2) << over100us_rate << "%"
                       << " | >1ms: "         << over1ms_rate << "%"
                       << " | Max Latency: "  << maxLatency << " us" << std::endl;
