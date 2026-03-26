@@ -220,7 +220,8 @@ void Engine::processCommand(const std::string& line) {
         if (enableSnapshot) triggerSnapshot();
     } else if (cmd == "RESTORE") {
         // 命令格式: RESTORE (一键恢复所有股票字典和账户)
-        
+        auto restoreStart = std::chrono::high_resolution_clock::now();
+
         // 1. 恢复统管的账户状态
         accountManager.loadSnapshot("test/snapshot_accounts.dat");
         std::cout << "[Engine] Global Restore: Accounts loaded." << std::endl;
@@ -248,28 +249,46 @@ void Engine::processCommand(const std::string& line) {
                  OrderBook* ob = getOrderBook(1);
                  if (ob) {
                      ob->loadSnapshot(filename);
+                     restoredCount++;
                      std::cout << "[Engine] Global Restore: OrderBook for Stock 1 loaded (Fallback)." << std::endl;
                  }
              }
         }
-        std::cout << "[Engine] System Global Restore Completed!" << std::endl;
+
+        auto restoreEnd = std::chrono::high_resolution_clock::now();
+        auto restoreUs  = std::chrono::duration_cast<std::chrono::microseconds>(restoreEnd - restoreStart).count();
+        std::cout << "[Engine] System Global Restore Completed! Restored " << restoredCount
+                  << " stock(s) in " << restoreUs << " us." << std::endl;
         
     } else if (cmd == "SLEEP") {
         // 用于给外部 gcore 争取时间，防止极小数据集瞬间跑完
         if (tokens.size() < 2) return;
         int ms = std::stoi(tokens[1]);
-        std::cout << "[Engine] Sleeing for " << ms << " ms (Simulating blocking/Wait for Gcore)..." << std::endl;
+        std::cout << "[Engine] Sleeping for " << ms << " ms (Simulating blocking/Wait for Gcore)..." << std::endl;
         usleep(ms * 1000);
     } else if (cmd == "ACCOUNT") {
         // 用于打印账户信息 ACCOUNT <ClientID>
         if (tokens.size() < 2) return;
         ClientID cid = std::stoull(tokens[1]);
         Account& acc = accountManager.getAccount(cid);
-        std::cout << "[Engine] Account " << cid << " | Balance: " << acc.balance 
-                  << " | FrozenFunds: " << acc.frozenFunds;
-        // 简单打印一下当前股票 1 的持仓
-        std::cout << " | Pos(Stock 1): " << acc.positions[1] 
-                  << " | FrozenPos(Stock 1): " << acc.frozenPositions[1] << std::endl;
+        std::cout << "[Engine] Account " << cid
+                  << " | Balance: "     << acc.balance
+                  << " | FrozenFunds: " << acc.frozenFunds << std::endl;
+        // 遍历该账户所有股票的持仓和冻结仓位
+        std::cout << "[Engine]   --- Positions ---" << std::endl;
+        for (const auto& kv : acc.positions) {
+            StockID sid = kv.first;
+            Qty pos     = kv.second;
+            Qty frozen  = 0;
+            auto it = acc.frozenPositions.find(sid);
+            if (it != acc.frozenPositions.end()) frozen = it->second;
+            std::cout << "[Engine]   Stock " << sid
+                      << " | Pos: "       << pos
+                      << " | FrozenPos: " << frozen << std::endl;
+        }
+        if (acc.positions.empty()) {
+            std::cout << "[Engine]   (no positions)" << std::endl;
+        }
     } else if (cmd == "GIVE_POS") {
         // 用于在测试数据开头强行给空头分配仓位 GIVE_POS <ClientID> <StockID> <Qty>
         if (tokens.size() < 4) return;
@@ -414,7 +433,19 @@ void Engine::triggerSnapshot() {
         // 立即返回以继续处理订单
         auto end = std::chrono::high_resolution_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        std::cout << "[Engine] Snapshot triggered. Fork time: " << diff.count() << " us. Child PID: " << pid << std::endl;
+        std::cout << "[Engine] Snapshot triggered. Fork time: " << diff.count() << " us. Child PID: " << pid;
+        // 读取 /proc/self/status 中的 VmRSS 作为当前物理内存占用
+        {
+            std::ifstream statusFile("/proc/self/status");
+            std::string statusLine;
+            while (std::getline(statusFile, statusLine)) {
+                if (statusLine.find("VmRSS:") != std::string::npos) {
+                    std::cout << " | " << statusLine;
+                    break;
+                }
+            }
+        }
+        std::cout << std::endl;
     }
 }
 

@@ -107,14 +107,15 @@ echo "========================================"
 sed -i 's/^ENABLE_SNAPSHOT=.*/ENABLE_SNAPSHOT=0/' conf/matching_engine.conf
 sed -i 's/^ENABLE_STRESS_TEST=.*/ENABLE_STRESS_TEST=1/' conf/matching_engine.conf
 
-rm -f "$SNAP_DIR/baseline_raw.log"
+rm -f "$SNAP_DIR/baseline_raw.log" "$SNAP_DIR/baseline_full.log"
 
 { cat "$DATA_FILE"; echo "EXIT"; } \
     | bin/matching_engine \
-    | grep -E "^\[Engine\] Account " \
+    | tee "$SNAP_DIR/baseline_full.log" \
+    | grep -E "^\[Engine\] (Account |  Stock )" \
     > "$SNAP_DIR/baseline_raw.log"
 
-echo "   Baseline done. Account lines: $(wc -l < "$SNAP_DIR/baseline_raw.log")"
+echo "   Baseline done. Account lines: $(wc -l < "$SNAP_DIR/baseline_raw.log"), Full log: $(wc -l < "$SNAP_DIR/baseline_full.log") lines"
 
 # 对账户输出排序（保证比对时顺序一致）
 sort "$SNAP_DIR/baseline_raw.log" > "$SNAP_DIR/baseline.log"
@@ -133,7 +134,7 @@ sed -i 's/^ENABLE_SNAPSHOT=.*/ENABLE_SNAPSHOT=1/' conf/matching_engine.conf
 
 # 清理旧快照
 rm -f test/snapshot_*.dat
-rm -f "$SNAP_DIR/fork_raw.log"
+rm -f "$SNAP_DIR/fork_raw.log" "$SNAP_DIR/fork_full.log"
 
 # 3.1 阶段一：喂入 part1（含 SNAPSHOT 指令），喂完即 EXIT
 #     SNAPSHOT 是异步 fork 子进程写盘，EXIT 之前给子进程一点时间完成写盘
@@ -156,10 +157,11 @@ ls -lh test/snapshot_*.dat
 echo "   [3.2] Phase 2: new process RESTORE + feeding part2..."
 { echo "RESTORE"; cat "$PART2_FILE"; echo "EXIT"; } \
     | bin/matching_engine \
-    | grep -E "^\[Engine\] Account " \
+    | tee "$SNAP_DIR/fork_full.log" \
+    | grep -E "^\[Engine\] (Account |  Stock )" \
     > "$SNAP_DIR/fork_raw.log" 2>&1
 
-echo "   Fork done. Account lines: $(wc -l < "$SNAP_DIR/fork_raw.log")"
+echo "   Fork done. Account lines: $(wc -l < "$SNAP_DIR/fork_raw.log"), Full log: $(wc -l < "$SNAP_DIR/fork_full.log") lines"
 
 # 对 fork 输出排序
 sort "$SNAP_DIR/fork_raw.log" > "$SNAP_DIR/fork.log"
